@@ -1,89 +1,135 @@
-"""pyxelでイメージバンクが読み込まれている前提
-"""
+from collections.abc import Callable
+import math
 
 import pyxel
 
+from modules.config import Config
+
 class Unit:
-    PADDING_X: int = 0
-    PADDING_Y: int = 0
-    SIZE: int = 16
-    TRANSPARENT_COLOR: int = 2
-
-    GROUP_NULL: int = -1
-    GROUP_PLANE: int = 0
-    GROUP_PLAYER: int = 10
-    GROUP_CPU: int = 20
-    GROUP_WALL: int = 30
-
-    SCENE_DEFAULT: int = 0
-    SCENE_ONMOUSE: int = 1
-    SCENE_SELECTED: int = 2
-    SCENE_MOVING: int = 3
-    SCENE_MOVEEND: int = 4
-
-    VECTORS: list[tuple[int, int]] = [(1,0),(0,1),(-1,0),(0,-1),(1,1),(-1,1),(-1,-1),(1,-1)]
-
-    def __init__(self,
-                 ix: int, iy: int, group_idx: int,
-                 vectors: list[tuple[int, int]] = []) -> None:
-        #self.t_start = pyxel.frame_count
-        self.ix = ix
-        self.iy = iy
+    def __init__(self, loc_idx: int, group_idx: int, on_state_change: Callable[[int], None]) -> None:
+        self.loc_idx = loc_idx
         self.group_idx = group_idx
-        self.on_mouse = False
-        self.scene = self.SCENE_DEFAULT
-        self.vectors = vectors
+        self.on_state_change = on_state_change
 
-    def get_xy0(self) -> tuple[int, int]:
-        x = self.PADDING_X + self.ix * self.SIZE
-        y = self.PADDING_Y + self.iy * self.SIZE
-        return x, y
+        (self.x0, self.y0), _ = Config.get_xy(self.loc_idx)
+        self.direction = 1 # 視線方向.1=右,-1=左
 
-    def get_xy01(self) -> list[tuple[int, int]]:
-        x0, y0 = self.get_xy0()
-        return [(x0, y0), (x0+self.SIZE, y0+self.SIZE)]
+        self.anim_idx = 0
+        self.t = pyxel.frame_count
 
-    @classmethod
-    def init_null(cls, ix: int, iy: int) -> "Unit":
-        return cls(ix, iy, cls.GROUP_NULL)
+        self.is_goaled = False
+        self.is_source = False
+        self.is_destination = False
+        self._flight = []
+        self._flight_end_idx = None
+
 
     @classmethod
-    def init_player(cls, ix: int, iy: int) -> "Unit":
-        return cls(ix, iy, cls.GROUP_PLAYER, cls.VECTORS)
+    def init_player(cls, loc_idx: int, on_state_change: Callable[[int], None]) -> "Unit":
+        return cls(loc_idx, Config.GROUP_PLAYER, on_state_change)
 
     @classmethod
-    def init_cpu(cls, ix: int, iy: int) -> "Unit":
-        return cls(ix, iy, cls.GROUP_CPU, cls.VECTORS)
+    def init_cpu(cls, loc_idx: int, on_state_change: Callable[[int], None]) -> "Unit":
+        return cls(loc_idx, Config.GROUP_CPU, on_state_change)
 
     @classmethod
-    def init_wall(cls, ix: int, iy: int) -> "Unit":
-        return cls(ix, iy, cls.GROUP_WALL)
+    def init_field(cls, loc_idx: int, on_state_change: Callable[[int], None]) -> "Unit":
+        return cls(loc_idx, Config.GROUP_FIELD, on_state_change)
 
     @classmethod
-    def init_plane(cls, ix: int, iy: int) -> "Unit":
-        return cls(ix, iy, cls.GROUP_PLANE)
+    def init_wall(cls, loc_idx: int, on_state_change: Callable[[int], None]) -> "Unit":
+        return cls(loc_idx, Config.GROUP_WALL, on_state_change)
 
-    def is_player_unit(self) -> bool:
-        return self.group_idx == self.GROUP_PLAYER
+    def is_movable_player(self) -> bool:
+        return not(self.is_goaled) and self.group_idx == Config.GROUP_PLAYER
 
-    def is_plane(self) -> bool:
-        return self.group_idx == self.GROUP_PLANE
+    def is_player(self) -> bool:
+        return self.group_idx == Config.GROUP_PLAYER
 
-    def is_null(self) -> bool:
-        return self.group_idx == self.GROUP_NULL
+    def is_cpu(self) -> bool:
+        return self.group_idx == Config.GROUP_CPU
 
-    def mouse_over(self, mouse_x: int, mouse_y: int) -> bool:
-        (x0, y0), (x1, y1) = self.get_xy01()
-        self.on_mouse = x0 <= mouse_x < x1 and y0 <= mouse_y < y1
-        if self.on_mouse:
-            self.scene = self.SCENE_ONMOUSE
-        else:
-            self.scene = self.SCENE_DEFAULT
+    def is_field(self) -> bool:
+        return self.group_idx == Config.GROUP_FIELD
+
+    def is_wall(self) -> bool:
+        return self.group_idx == Config.GROUP_WALL
+
+    def move(self, parabola: list[tuple[int, int]], flight_end_idx: int) -> None:
+        self._flight = parabola
+        self._flight_end_idx = flight_end_idx
+
+    def update(self, is_interact: bool) -> None:
+        """
+        戻り値: Trueのとき「選択された」
+        """
+        # 移動中
+        if 0 < len(self._flight):
+            self.x0, self.y0 = self._flight.pop(0)
+            if 0 < len(self._flight):
+                return
+
+            # 到着した
+            self.on_state_change(self._flight_end_idx)
+            self._flight_end_idx = None
+            return
+
+        # interactに関わらないupdate処理
+        if Config.is_animate(self.group_idx):
+            self.anim_idx = ((pyxel.frame_count - self.t) % 40) // 5 # = {0,1,..,7}
+
+        # 位置の初期化
+        (x0, y0), (x1, y1) = Config.get_xy(self.loc_idx)
+        self.x0, self.y0 = x0, y0
+
+        # interact不可時は処理続行しない
+        if not is_interact:
+            return
+
+        # 視線
+        self.direction = 1 if x0 < pyxel.mouse_x else -1
+
+        # 出発地の場合
+        if self.is_source:
+            self.x0 += pyxel.rndf(-2, 2)
+            self.y0 += pyxel.rndf(-2, 2)
+
+        # オンマウス
+        if x0 <= pyxel.mouse_x < x1 and y0 <= pyxel.mouse_y < y1:
+            # オンマウス状態の場合は、表示位置をブラす
+            self.x0 += pyxel.rndf(-1, 1)
+            self.y0 += pyxel.rndf(-1, 1)
+
+            # オンマウス状態でクリックされた
+            if pyxel.btnp(pyxel.MOUSE_BUTTON_LEFT):
+                self.on_state_change(self.loc_idx)
+
+    def effect_update(self) -> bool:
+        if 16 <= pyxel.frame_count - self.t:
+            return True
+        return False
 
     def draw(self) -> None:
-        #i = ((pyxel.frame_count - self.t_start) % 16) // 2
-        #pyxel.blt(self.x, self.y, 0, i * 16, 16, 16, 16, self.TRANSPARENT_COLOR)
-        pyxel.rect(*self.get_xy0(), self.SIZE, self.SIZE, 1 + self.group_idx)
+        # DEBUG
+        if Config.SHOW_NUMBER:
+            (x, y), _ = Config.get_xy(self.loc_idx)
+            pyxel.text(x, y, f"{self.loc_idx}", 15)
 
-        if self.scene == self.SCENE_ONMOUSE:
-            pyxel.rectb(*self.get_xy0(), self.SIZE, self.SIZE, 12)
+        if self.is_destination or self.is_source:
+            (x, y), _ = Config.get_xy(self.loc_idx)
+            c = Config.SELECTED_COLOR if self.is_source else Config.DESTINATION_COLOR
+            pyxel.rectb(x, y, Config.CELL_SIZE, Config.CELL_SIZE, c)
+
+        if self.group_idx == Config.GROUP_FIELD:
+            return
+
+        u, v = Config.get_uv(self.anim_idx, self.group_idx, self.is_goaled)
+        w, h = Config.get_wh(self.direction)
+        pyxel.blt(self.x0, self.y0, 0, u, v, w, h, Config.TRANSPARENT_COLOR)
+
+    def effect_draw(self) -> None:
+        bit = pyxel.frame_count - self.t
+        (x, y), _ = Config.get_xy(self.loc_idx)
+        u, v = Config.get_uv(self.anim_idx, self.group_idx, self.is_goaled)
+        w, h = Config.get_wh(self.direction)
+        pyxel.blt(x, y + bit, 0, u, v, w, h - bit, Config.TRANSPARENT_COLOR)

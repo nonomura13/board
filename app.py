@@ -1,51 +1,61 @@
+"""
+cpu
+"""
 import pyxel
 
-import modules.unit
-import modules.model
-
-SCREEN_WIDTH  = 480
-SCREEN_HEIGHT = 240
-TRANSPARENT_COLOR = 2
+from modules.config import Config
+from modules.scene import Scene
+from modules.board import Board
 
 class App:
     def __init__(self) -> None:
-        pyxel.init(SCREEN_WIDTH, SCREEN_HEIGHT, title="BOARD")
-        pyxel.load("assets/resource.pyxres")
+        pyxel.init(Config.SCREEN_WIDTH, Config.SCREEN_HEIGHT, title=Config.APP_TITLE)
+        pyxel.load(Config.RESOURCE_PATH)
         pyxel.mouse(True)
 
-        self.model = modules.model.Model()
+        self.scene = Scene.player_splash()
+        self.board = Board(self.on_player_turn_end)
 
         pyxel.run(self.update, self.draw)
+
+    def on_player_turn_end(self) -> None:
+        # 勝敗判定
+        is_finished, winner = self.board.is_finished()
+
+        #
+        if is_finished:
+            self.scene = Scene.gameover_splash(winner)
+        else:
+            self.scene = Scene.cpu_splash()
 
     def update(self) -> None:
         if pyxel.btnp(pyxel.KEY_Q):
             pyxel.quit()
 
-        # TODO: シーンと操作可能判定
+        if pyxel.btnp(pyxel.KEY_1):
+            self.scene = Scene.cpu_splash()
+            self.board.clear_destination_ids()
 
-        # マウス追従
-        unit = self.model.mouse_over(pyxel.mouse_x, pyxel.mouse_y)
-        if unit is None:
-            # 以降の処理不要
-            return
+        if pyxel.btnp(pyxel.KEY_2):
+            self.scene = Scene.player_splash()
+            self.board.clear_destination_ids()
 
-        # ユニット上でクリックされた
-        if pyxel.btnp(pyxel.MOUSE_BUTTON_LEFT) and unit.is_player_unit():
-            destinations = self.model.get_destinations(unit.ix, unit.iy)
-            if 0 == len(destinations):
-                return
-            # シーンを変更
-            pass # TODO
+        if pyxel.btnp(pyxel.KEY_3):
+            self.scene = Scene.gameover_splash("PLAYER")
+            self.board.clear_destination_ids()
 
-
-
-
-        #if pyxel.frame_count % 60 == 0:
-        #    self.units.append(Unit())
+        self.scene = self.scene.update()
+        # self.scene.is_interact
+        self.board.update(self.scene.is_interact)
 
     def draw(self) -> None:
         pyxel.cls(1)
-        for unit in self.model.units:
-            unit.draw()
+
+        vlines = Config.get_vlines()
+        for x0, y0, x1, y1 in vlines:
+            pyxel.line(x0, y0, x1, y1, 15)
+
+        self.board.draw()
+        self.scene.draw()
 
 App()
