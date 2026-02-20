@@ -1,20 +1,19 @@
 from collections.abc import Callable
 
 from modules.config import Config
+from modules.scene import Scene
 from modules.unit import Unit
 
 class Board:
-    def __init__(self, on_player_turn_end: Callable[[None], None]) -> None:
-        self.on_player_turn_end = on_player_turn_end
+    def __init__(self, on_turn_end: Callable[[None], None]) -> None:
+        self.on_turn_end = on_turn_end
         self.units = self._init_units()
-        self.effects = [] # effect用
-        self.is_interact = True
+        self.current_scene = None
+
         self.source_idx = None
         self.dest_idx = None
-        self.destination_ids = []
 
     def _init_units(self) -> list[Unit]:
-        # prohibited area
         prohibited_ids = []
         for ix in range(Config.N_T + 1):
             for iy in range(Config.N_T + 1 - ix):
@@ -61,32 +60,41 @@ class Board:
 
         return units
 
-    def clear_destination_ids(self) -> None:
-        if self.source_idx is not None:
-            self.units[self.source_idx].is_source = False
 
-        for idx in self.destination_ids:
-            self.units[idx].is_destination = False
-
-        self.destination_ids = []
-
-    def set_destination_ids(self, loc_idx: int) -> None:
-        self.units[loc_idx].is_source = True
-        self.source_idx = loc_idx
+    def get_destination_ids(self, loc_idx: int) -> list[int]:
         ix, iy = loc_idx % Config.N_X, loc_idx // Config.N_X
-
-        self.destination_ids = []
+        destination_ids = []
         for vx, vy in Config.VECTORS:
             x1, y1 = ix + vx, iy + vy
-
             while Config.in_field(x1, y1):
                 idx_1 = x1 + y1 * Config.N_X
                 if self.units[idx_1].is_field():
-                    self.units[idx_1].is_destination = True
-                    self.destination_ids.append(idx_1)
+                    destination_ids.append(idx_1)
                     break
                 x1 += vx
                 y1 += vy
+
+        return destination_ids
+
+    def clear_destination_ids(self) -> None:
+        for unit in self.units:
+            unit.is_destination = False
+
+    def judge(self) -> tuple[bool, str]:
+        goaled_count = {'PLAYER': 0, 'CPU': 0}
+        for unit in self.units:
+            if unit.is_player() and unit.is_goaled:
+                goaled_count['PLAYER'] += 1
+            if unit.is_cpu() and unit.is_goaled:
+                goaled_count['CPU'] += 1
+        print(goaled_count)
+
+        for winner, count in goaled_count.items():
+            if count == Config.N_U:
+                print('HERE. finished')
+                return True, winner
+
+        return False, ''
 
     def swap(self, i: int, j: int) -> None:
         # 地点の交換
@@ -99,80 +107,62 @@ class Board:
         for idx in ids:
             if self.units[idx].is_wall():
                 self.units[idx] = Unit.init_field(idx, self.on_state_change)
-                self.effects.append(Unit.init_wall(idx, None))
+        #        self.effects.append(Unit.init_wall(idx, None))
 
         # j(dest)が相手の領域に到着した
         if Config.in_opponent_territory(self.units[j].group_idx, j):
             self.units[j].is_goaled = True
 
-    def is_finished(self) -> tuple[bool, str]:
-        goaled_count = {'PLAYER': 0, 'CPU': 0}
-        for unit in self.units:
-            if unit.is_player() and unit.is_goaled:
-                goaled_count['PLAYER'] += 1
-            if unit.is_cpu() and unit.is_goaled:
-                goaled_count['CPU'] += 1
-
-        for winner, count in goaled_count.items():
-            if count == Config.N_U:
-                return True, winner
-
-        return False, ''
-
     def on_state_change(self, loc_idx: int) -> None:
-        # インタラクト禁止中にコールされた: 移動終了
-        if not self.is_interact:
-            # 置換
+        if self.current_scene.is_cpu():
+            # CPUターン中のon state change == move end
             self.swap(self.source_idx, self.dest_idx)
-            self.clear_destination_ids()
+            self.on_turn_end()
+            return
+
+        # CPUターンでない=プレイヤーターンである
+        # 移動の終了を告げるモノ:
+        if not self.current_scene.is_operable:
+            self.swap(self.source_idx, self.dest_idx)
             self.source_idx = None
             self.dest_idx = None
-
-            # 終了を反映
-            self.on_player_turn_end()
-
-            self.is_interact = True
+            self.on_turn_end()
             return
 
-        # loc_idxが操作できるplayerだ >> 移動先を決める
-        if self.units[loc_idx].is_movable_player():
-            if self.source_idx == loc_idx:
-                self.clear_destination_ids()
-                self.source_idx = None
-                return
-
-            self.clear_destination_ids()
-            self.set_destination_ids(loc_idx)
-            return
-
-        # loc_idxが移動先
-        if loc_idx in self.destination_ids:
-            # unitの移動
+        # 目的地を選択した
+        if self.units[loc_idx].is_destination:
+            # 移動処理
             self.dest_idx = loc_idx
-            parabola = Config.make_parabola(self.source_idx, loc_idx)
-            self.units[self.source_idx].move(parabola, loc_idx)
-            self.is_interact = False
+            parabola = Config.make_parabola(self.source_idx, self.dest_idx)
+            self.units[self.source_idx].move(parabola, self.dest_idx)
+
+            # 選択中の描画を止める
             self.clear_destination_ids()
 
+            # 操作を止める
+            self.current_scene.is_operable = False
+            return
 
-    def update(self, is_interact: bool) -> None:
+        # 選択中でないプレイヤーユニットを選択した:
+        if self.units[loc_idx].is_movable_player() \
+        and loc_idx != self.source_idx:
+            # 目的地の選択しなおし
+            self.clear_destination_ids()
+            destination_ids = self.get_destination_ids(loc_idx)
+            self.source_idx = loc_idx
+            for idx in destination_ids:
+                self.units[idx].is_destination = True
+            return
+
+        # それ以外を選択した:
+        self.source_idx = False
+        self.clear_destination_ids()
+
+    def update(self, scene: Scene) -> None:
+        self.current_scene = scene
         for unit in self.units:
-            unit.update(is_interact & self.is_interact)
-
-        # effect用の例外処理
-        drop_ids = []
-        for idx, unit in enumerate(self.effects):
-            ret = unit.effect_update()
-            if ret:
-                drop_ids.append(idx)
-
-        for idx in drop_ids[::-1]:
-            self.effects.pop(idx)
+            unit.update(scene.is_operable)
 
     def draw(self) -> None:
         for unit in self.units:
             unit.draw()
-
-        # effect用の例外処理
-        for unit in self.effects:
-            unit.effect_draw()
