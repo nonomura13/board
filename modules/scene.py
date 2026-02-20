@@ -77,7 +77,7 @@ class Scene:
             pyxel.text(x + 1, y+1, t, c1)
 
         # DEBUG
-        pyxel.text(0, Config.SCREEN_HEIGHT - 7, f"{self.is_operable=}", 10)
+        #pyxel.text(0, Config.SCREEN_HEIGHT - 7, f"{self.is_operable=}", 10)
 
         # splash screen
         if self.is_splash():

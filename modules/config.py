@@ -1,7 +1,7 @@
 import pyxel
 
 class Config:
-    SCREEN_WIDTH: int = 256
+    SCREEN_WIDTH: int = 160
     SCREEN_HEIGHT: int = 256
     APP_TITLE: str = "PYONG"
     RESOURCE_PATH: str = "assets/resource.pyxres"
@@ -11,7 +11,7 @@ class Config:
     SELECTED_COLOR: int = 12
     DESTINATION_COLOR: int = 4
 
-    N_X: int = 15
+    N_X: int = 13
     N_Y: int =  9
     N_T: int =  5 # for territory x
     N_U: int =  9

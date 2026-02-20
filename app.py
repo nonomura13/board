@@ -9,7 +9,7 @@ class App:
     def __init__(self) -> None:
         pyxel.init(Config.SCREEN_WIDTH, Config.SCREEN_HEIGHT, title=Config.APP_TITLE)
         pyxel.load(Config.RESOURCE_PATH)
-        pyxel.mouse(True)
+        #pyxel.mouse(True)
 
         self.scene = Scene.player_splash()
         self.board = Board(self.on_turn_end)
